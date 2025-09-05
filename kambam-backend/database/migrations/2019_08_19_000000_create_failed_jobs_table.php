@@ -8,20 +8,19 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('cards', function (Blueprint $table) {
+        Schema::create('failed_jobs', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('board_id')->constrained('boards')->onDelete('cascade');
-            $table->foreignId('column_id')->constrained('columns')->onDelete('cascade');
-            $table->string('title', 120);
-            $table->text('description')->nullable();
-            $table->integer('position')->default(0);
-            $table->foreignId('created_by')->constrained('users')->onDelete('cascade');
-            $table->timestamps();
+            $table->string('uuid')->unique();
+            $table->text('connection');
+            $table->text('queue');
+            $table->longText('payload');
+            $table->longText('exception');
+            $table->timestamp('failed_at')->useCurrent();
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('cards');
+        Schema::dropIfExists('failed_jobs');
     }
 };

@@ -8,18 +8,15 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('columns', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('board_id')->constrained('boards')->onDelete('cascade');
-            $table->string('name', 40);
-            $table->integer('order')->default(0);
-            $table->integer('wip_limit')->default(999);
-            $table->timestamps();
+        Schema::create('password_resets', function (Blueprint $table) {
+            $table->string('email')->index();
+            $table->string('token');
+            $table->timestamp('created_at')->nullable();
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('columns');
+        Schema::dropIfExists('password_resets');
     }
 };
