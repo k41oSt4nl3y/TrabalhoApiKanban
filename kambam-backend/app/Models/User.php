@@ -39,7 +39,7 @@ class User extends Authenticatable
 
     public function moveHistories()
     {
-        return $this->hasMany(MoveHistory::class, 'by_user_id');
+        return $this->hasMany(MoveHistory::class, 'user_id');
     }
 
     public function tokens()

@@ -16,7 +16,7 @@ Route::get('/boards/{board}', [BoardController::class, 'show']);
 Route::get('/cards/{card}', [CardController::class, 'show']);
 
 // Protected routes
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware('auth.custom')->group(function () {
     // Auth routes
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);

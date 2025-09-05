@@ -10,12 +10,14 @@ return new class extends Migration
     {
         Schema::create('personal_access_tokens', function (Blueprint $table) {
             $table->id();
-            $table->morphs('tokenable');
-            $table->string('name');
-            $table->string('token', 64)->unique();
-            $table->text('abilities')->nullable();
+            $table->foreignId('user_id')->constrained()->onDelete('cascade');
+            $table->string('token_hash', 64)->unique();
+            $table->string('refresh_token_hash', 64)->unique();
+            $table->timestamp('expires_at');
+            $table->timestamp('refresh_expires_at');
             $table->timestamp('last_used_at')->nullable();
-            $table->timestamp('expires_at')->nullable();
+            $table->string('ip_address')->nullable();
+            $table->text('user_agent')->nullable();
             $table->timestamps();
         });
     }

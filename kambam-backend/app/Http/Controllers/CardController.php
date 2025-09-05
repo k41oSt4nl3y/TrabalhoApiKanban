@@ -5,89 +5,296 @@ namespace App\Http\Controllers;
 use App\Models\Board;
 use App\Models\Card;
 use App\Models\Column;
+use App\Models\MoveHistory;
+use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\DB;
 
 class CardController extends Controller
 {
-    public function show(Card $card)
+    public function show(Card $card): JsonResponse
     {
-        return response()->json($card->load('column'));
+        $card->load([
+            'board:id,title',
+            'column:id,name',
+            'creator:id,name',
+            'moveHistories' => function ($query) {
+                $query->with(['fromColumn:id,name', 'toColumn:id,name', 'user:id,name'])
+                      ->orderBy('at', 'desc')
+                      ->limit(10);
+            }
+        ]);
+
+        $cardData = [
+            'id' => $card->id,
+            'title' => $card->title,
+            'description' => $card->description,
+            'position' => $card->position,
+            'board' => [
+                'id' => $card->board->id,
+                'title' => $card->board->title,
+            ],
+            'column' => [
+                'id' => $card->column->id,
+                'name' => $card->column->name,
+            ],
+            'created_by' => [
+                'id' => $card->creator->id,
+                'name' => $card->creator->name,
+            ],
+            'history' => $card->moveHistories->map(function ($history) {
+                return [
+                    'id' => $history->id,
+                    'type' => $history->type,
+                    'from_column' => $history->fromColumn ? [
+                        'id' => $history->fromColumn->id,
+                        'name' => $history->fromColumn->name,
+                    ] : null,
+                    'to_column' => $history->toColumn ? [
+                        'id' => $history->toColumn->id,
+                        'name' => $history->toColumn->name,
+                    ] : null,
+                    'user' => [
+                        'id' => $history->user->id,
+                        'name' => $history->user->name,
+                    ],
+                    'at' => $history->at,
+                ];
+            }),
+            'created_at' => $card->created_at,
+            'updated_at' => $card->updated_at,
+        ];
+
+        return response()->json([
+            'card' => $cardData
+        ], 200);
     }
 
-    public function store(Request $request, Board $board)
+    public function store(Request $request, Board $board): JsonResponse
     {
-        $this->authorize('createCard', $board);
-        
-        $validated = $request->validate([
+        $validator = Validator::make($request->all(), [
             'title' => 'required|string|min:1|max:120',
-            'description' => 'nullable|string',
+            'description' => 'nullable|string|max:1000',
             'column_id' => 'required|exists:columns,id',
-            'position' => 'nullable|integer'
         ]);
 
-        $column = Column::findOrFail($validated['column_id']);
-        
-        // Verify column belongs to board
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Dados inválidos',
+                'message' => 'Título é obrigatório (1-120 caracteres) e coluna deve existir',
+                'details' => $validator->errors()
+            ], 400);
+        }
+
+        $column = Column::find($request->column_id);
+
+        // Verificar se a coluna pertence ao board
         if ($column->board_id !== $board->id) {
-            abort(422, 'Column does not belong to this board');
+            return response()->json([
+                'error' => 'Coluna inválida',
+                'message' => 'A coluna especificada não pertence a este board'
+            ], 400);
         }
 
-        // Check WIP limit
-        if ($column->wip_limit && $column->cards()->count() >= $column->wip_limit) {
-            throw ValidationException::withMessages([
-                'column_id' => ['WIP_LIMIT_REACHED']
+        // Verificar WIP limit
+        if ($column->isAtWipLimit()) {
+            return response()->json([
+                'error' => 'WIP_LIMIT_REACHED',
+                'message' => "A coluna '{$column->name}' atingiu o limite de WIP ({$column->wip_limit})"
+            ], 422);
+        }
+
+        $user = $request->user();
+
+        try {
+            DB::beginTransaction();
+
+            $nextPosition = $column->cards()->max('position') + 1;
+
+            $card = Card::create([
+                'board_id' => $board->id,
+                'column_id' => $column->id,
+                'title' => $request->title,
+                'description' => $request->description,
+                'position' => $nextPosition,
+                'created_by' => $user->id,
             ]);
-        }
 
-        $card = $board->cards()->create([
-            'title' => $validated['title'],
-            'description' => $validated['description'] ?? null,
-            'column_id' => $validated['column_id'],
-            'position' => $validated['position'] ?? 0,
-            'created_by' => $request->user()->id
-        ]);
+            // Registrar no histórico
+            MoveHistory::logCreated($card, $user);
 
-        return response()->json($card, 201);
-    }
+            DB::commit();
 
-    public function update(Request $request, Card $card)
-    {
-        $this->authorize('update', $card->board);
+            $card->load(['column:id,name', 'creator:id,name']);
 
-        $validated = $request->validate([
-            'title' => 'sometimes|required|string|min:1|max:120',
-            'description' => 'nullable|string',
-            'column_id' => 'sometimes|required|exists:columns,id',
-            'position' => 'sometimes|required|integer'
-        ]);
+            return response()->json([
+                'message' => 'Card criado com sucesso',
+                'card' => [
+                    'id' => $card->id,
+                    'title' => $card->title,
+                    'description' => $card->description,
+                    'position' => $card->position,
+                    'column' => [
+                        'id' => $card->column->id,
+                        'name' => $card->column->name,
+                    ],
+                    'created_by' => [
+                        'id' => $card->creator->id,
+                        'name' => $card->creator->name,
+                    ],
+                    'created_at' => $card->created_at,
+                    'updated_at' => $card->updated_at,
+                ]
+            ], 201);
 
-        if (isset($validated['column_id'])) {
-            $newColumn = Column::findOrFail($validated['column_id']);
+        } catch (\Exception $e) {
+            DB::rollBack();
             
-            // Verify column belongs to same board
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => 'Não foi possível criar o card'
+            ], 500);
+        }
+    }
+
+    public function update(Request $request, Card $card): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'title' => 'sometimes|required|string|min:1|max:120',
+            'description' => 'nullable|string|max:1000',
+            'column_id' => 'sometimes|required|exists:columns,id',
+            'position' => 'sometimes|integer|min:1',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Dados inválidos',
+                'message' => 'Dados fornecidos são inválidos',
+                'details' => $validator->errors()
+            ], 400);
+        }
+
+        $user = $request->user();
+        $oldColumnId = $card->column_id;
+        $newColumnId = $request->column_id ?? $card->column_id;
+
+        // Se está movendo para uma nova coluna
+        if ($newColumnId !== $oldColumnId) {
+            $newColumn = Column::find($newColumnId);
+
+            // Verificar se a nova coluna pertence ao mesmo board
             if ($newColumn->board_id !== $card->board_id) {
-                abort(422, 'Cannot move card to a different board');
+                return response()->json([
+                    'error' => 'Coluna inválida',
+                    'message' => 'A coluna de destino deve pertencer ao mesmo board'
+                ], 400);
             }
 
-            // Check WIP limit only if moving to a different column
-            if ($newColumn->id !== $card->column_id) {
-                if ($newColumn->wip_limit && $newColumn->cards()->count() >= $newColumn->wip_limit) {
-                    throw ValidationException::withMessages([
-                        'column_id' => ['WIP_LIMIT_REACHED']
-                    ]);
-                }
+            // Verificar WIP limit da nova coluna
+            if ($newColumn->isAtWipLimit()) {
+                return response()->json([
+                    'error' => 'WIP_LIMIT_REACHED',
+                    'message' => "A coluna '{$newColumn->name}' atingiu o limite de WIP ({$newColumn->wip_limit})"
+                ], 422);
             }
         }
 
-        $card->update($validated);
-        return response()->json($card);
+        try {
+            DB::beginTransaction();
+
+            $updateData = [];
+
+            if ($request->has('title')) {
+                $updateData['title'] = $request->title;
+            }
+
+            if ($request->has('description')) {
+                $updateData['description'] = $request->description;
+            }
+
+            if ($request->has('column_id') && $newColumnId !== $oldColumnId) {
+                $updateData['column_id'] = $newColumnId;
+                
+                // Recalcular posição na nova coluna
+                if ($request->has('position')) {
+                    $updateData['position'] = $request->position;
+                } else {
+                    $updateData['position'] = $newColumn->cards()->max('position') + 1;
+                }
+            } elseif ($request->has('position')) {
+                $updateData['position'] = $request->position;
+            }
+
+            $card->update($updateData);
+
+            // Registrar no histórico se houve mudança de coluna
+            if ($newColumnId !== $oldColumnId) {
+                MoveHistory::logMoved($card, $oldColumnId, $newColumnId, $user);
+            } else {
+                MoveHistory::logUpdated($card, $user);
+            }
+
+            DB::commit();
+
+            $card->load(['column:id,name', 'creator:id,name']);
+
+            return response()->json([
+                'message' => 'Card atualizado com sucesso',
+                'card' => [
+                    'id' => $card->id,
+                    'title' => $card->title,
+                    'description' => $card->description,
+                    'position' => $card->position,
+                    'column' => [
+                        'id' => $card->column->id,
+                        'name' => $card->column->name,
+                    ],
+                    'created_by' => [
+                        'id' => $card->creator->id,
+                        'name' => $card->creator->name,
+                    ],
+                    'created_at' => $card->created_at,
+                    'updated_at' => $card->updated_at,
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => 'Não foi possível atualizar o card'
+            ], 500);
+        }
     }
 
-    public function destroy(Card $card)
+    public function destroy(Request $request, Card $card): JsonResponse
     {
-        $this->authorize('update', $card->board);
-        $card->delete();
-        return response()->json(null, 204);
+        $user = $request->user();
+
+        try {
+            DB::beginTransaction();
+
+            // Registrar no histórico antes de deletar
+            MoveHistory::logDeleted($card, $user);
+
+            $card->delete();
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Card deletado com sucesso'
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'error' => 'Erro interno do servidor',
+                'message' => 'Não foi possível deletar o card'
+            ], 500);
+        }
     }
 }

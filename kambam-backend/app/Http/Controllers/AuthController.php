@@ -4,101 +4,157 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
-use Laravel\Sanctum\PersonalAccessToken;
+use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
-    public function login(Request $request)
+    public function login(Request $request): JsonResponse
     {
-        $request->validate([
+        $validator = Validator::make($request->all(), [
             'email' => 'required|email',
-            'password' => 'required'
+            'password' => 'required|string|min:6',
         ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Dados inválidos',
+                'message' => 'Email e senha são obrigatórios',
+                'details' => $validator->errors()
+            ], 400);
+        }
 
         $user = User::where('email', $request->email)->first();
 
-        if (! $user || ! Hash::check($request->password, $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
-            ]);
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            return response()->json([
+                'error' => 'Credenciais inválidas',
+                'message' => 'Email ou senha incorretos'
+            ], 401);
         }
 
-        // Delete existing tokens
-        $user->tokens()->delete();
+        $tokens = $user->createToken(
+            $request->ip(),
+            $request->userAgent()
+        );
 
-        // Create access token (1 hour)
-        $accessToken = $user->createToken('access_token', ['*'], now()->addHour());
+        return response()->json([
+            'message' => 'Login realizado com sucesso',
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+            ],
+            'tokens' => $tokens
+        ], 200);
+    }
+
+    public function refresh(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'refresh_token' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Dados inválidos',
+                'message' => 'Refresh token é obrigatório',
+                'details' => $validator->errors()
+            ], 400);
+        }
+
+        $user = User::whereHas('tokens', function ($query) use ($request) {
+            $query->where('refresh_token_hash', hash('sha256', $request->refresh_token))
+                  ->where('refresh_expires_at', '>', now());
+        })->first();
+
+        if (!$user) {
+            return response()->json([
+                'error' => 'Refresh token inválido ou expirado',
+                'message' => 'O refresh token fornecido é inválido ou expirou'
+            ], 401);
+        }
+
+        $tokens = $user->refreshToken($request->refresh_token);
+
+        if (!$tokens) {
+            return response()->json([
+                'error' => 'Falha ao renovar token',
+                'message' => 'Não foi possível renovar o token de acesso'
+            ], 401);
+        }
+
+        return response()->json([
+            'message' => 'Token renovado com sucesso',
+            'tokens' => $tokens
+        ], 200);
+    }
+
+    public function logout(Request $request): JsonResponse
+    {
+        $token = $this->extractToken($request);
+
+        if (!$token) {
+            return response()->json([
+                'error' => 'Token ausente',
+                'message' => 'É necessário fornecer um token de acesso válido'
+            ], 401);
+        }
+
+        $user = $request->user();
         
-        // Create refresh token (14 days)
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(14));
-
-        return response()->json([
-            'access_token' => $accessToken->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
-            'user' => $user
-        ]);
-    }
-
-    public function logout(Request $request)
-    {
-        $request->user()->tokens()->delete();
-
-        return response()->json([
-            'message' => 'Logged out successfully'
-        ]);
-    }
-
-    public function refresh(Request $request)
-    {
-        $request->validate([
-            'refresh_token' => 'required|string'
-        ]);
-
-        // Find the token
-        [$id, $token] = explode('|', $request->refresh_token);
-        $refreshToken = PersonalAccessToken::find($id);
-
-        if (!$refreshToken || !Hash::check($token, $refreshToken->token)) {
-            throw ValidationException::withMessages([
-                'refresh_token' => ['Invalid refresh token.']
-            ]);
+        if (!$user) {
+            return response()->json([
+                'error' => 'Usuário não autenticado',
+                'message' => 'Usuário não encontrado'
+            ], 401);
         }
 
-        // Check if token has refresh ability
-        if (!$refreshToken->can('refresh')) {
-            throw ValidationException::withMessages([
-                'refresh_token' => ['Token cannot be used for refresh.']
-            ]);
+        $revoked = $user->revokeToken($token);
+
+        if (!$revoked) {
+            return response()->json([
+                'error' => 'Token inválido',
+                'message' => 'O token fornecido é inválido'
+            ], 401);
         }
-
-        // Check if token is expired
-        if ($refreshToken->created_at->addDays(14)->isPast()) {
-            $refreshToken->delete();
-            throw ValidationException::withMessages([
-                'refresh_token' => ['Refresh token has expired.']
-            ]);
-        }
-
-        $user = $refreshToken->tokenable;
-        
-        // Delete all access tokens
-        $user->tokens()->where('name', 'access_token')->delete();
-
-        // Create new access token
-        $accessToken = $user->createToken('access_token', ['*'], now()->addHour());
 
         return response()->json([
-            'access_token' => $accessToken->plainTextToken,
-            'user' => $user
-        ]);
+            'message' => 'Logout realizado com sucesso'
+        ], 200);
     }
 
-    public function me(Request $request)
+    public function me(Request $request): JsonResponse
     {
-        return response()->json($request->user());
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'error' => 'Usuário não autenticado',
+                'message' => 'Usuário não encontrado'
+            ], 401);
+        }
+
+        return response()->json([
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'created_at' => $user->created_at,
+                'updated_at' => $user->updated_at,
+            ]
+        ], 200);
+    }
+
+    private function extractToken(Request $request): ?string
+    {
+        $header = $request->header('Authorization');
+
+        if (!$header || !str_starts_with($header, 'Bearer ')) {
+            return null;
+        }
+
+        return substr($header, 7);
     }
 }
