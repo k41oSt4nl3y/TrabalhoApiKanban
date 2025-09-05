@@ -90,7 +90,6 @@ class CardController extends Controller
 
         $column = Column::find($request->column_id);
 
-        // Verificar se a coluna pertence ao board
         if ($column->board_id !== $board->id) {
             return response()->json([
                 'error' => 'Coluna inválida',
@@ -98,7 +97,6 @@ class CardController extends Controller
             ], 400);
         }
 
-        // Verificar WIP limit
         if ($column->isAtWipLimit()) {
             return response()->json([
                 'error' => 'WIP_LIMIT_REACHED',
@@ -122,7 +120,6 @@ class CardController extends Controller
                 'created_by' => $user->id,
             ]);
 
-            // Registrar no histórico
             MoveHistory::logCreated($card, $user);
 
             DB::commit();
@@ -180,11 +177,9 @@ class CardController extends Controller
         $oldColumnId = $card->column_id;
         $newColumnId = $request->column_id ?? $card->column_id;
 
-        // Se está movendo para uma nova coluna
         if ($newColumnId !== $oldColumnId) {
             $newColumn = Column::find($newColumnId);
 
-            // Verificar se a nova coluna pertence ao mesmo board
             if ($newColumn->board_id !== $card->board_id) {
                 return response()->json([
                     'error' => 'Coluna inválida',
@@ -192,7 +187,6 @@ class CardController extends Controller
                 ], 400);
             }
 
-            // Verificar WIP limit da nova coluna
             if ($newColumn->isAtWipLimit()) {
                 return response()->json([
                     'error' => 'WIP_LIMIT_REACHED',
@@ -217,7 +211,6 @@ class CardController extends Controller
             if ($request->has('column_id') && $newColumnId !== $oldColumnId) {
                 $updateData['column_id'] = $newColumnId;
                 
-                // Recalcular posição na nova coluna
                 if ($request->has('position')) {
                     $updateData['position'] = $request->position;
                 } else {
@@ -229,7 +222,6 @@ class CardController extends Controller
 
             $card->update($updateData);
 
-            // Registrar no histórico se houve mudança de coluna
             if ($newColumnId !== $oldColumnId) {
                 MoveHistory::logMoved($card, $oldColumnId, $newColumnId, $user);
             } else {
@@ -277,7 +269,6 @@ class CardController extends Controller
         try {
             DB::beginTransaction();
 
-            // Registrar no histórico antes de deletar
             MoveHistory::logDeleted($card, $user);
 
             $card->delete();

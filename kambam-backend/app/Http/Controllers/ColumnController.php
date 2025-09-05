@@ -36,7 +36,6 @@ class ColumnController extends Controller
             ], 400);
         }
 
-        // Calcular a próxima ordem
         $nextOrder = $board->columns()->max('order') + 1;
 
         $column = Column::create([
@@ -84,7 +83,6 @@ class ColumnController extends Controller
             ], 400);
         }
 
-        // Verificar se o novo WIP limit não é menor que o número atual de cards
         $currentCardsCount = $column->getCardsCount();
         if ($request->wip_limit < $currentCardsCount) {
             return response()->json([
@@ -126,7 +124,6 @@ class ColumnController extends Controller
             ], 403);
         }
 
-        // Verificar se a coluna tem cards
         if ($column->getCardsCount() > 0) {
             return response()->json([
                 'error' => 'Coluna não pode ser deletada',
@@ -137,7 +134,6 @@ class ColumnController extends Controller
         try {
             DB::beginTransaction();
 
-            // Reordenar as colunas restantes
             $column->board->columns()
                 ->where('order', '>', $column->order)
                 ->decrement('order');

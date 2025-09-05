@@ -29,7 +29,6 @@ class CustomAuth
             ], 401);
         }
 
-        // Adicionar o usuário autenticado à requisição
         $request->setUserResolver(function () use ($user) {
             return $user;
         });

@@ -34,10 +34,7 @@ class AuthController extends Controller
             ], 401);
         }
 
-        $tokens = $user->createToken(
-            $request->ip(),
-            $request->userAgent()
-        );
+        $tokens = $user->createToken($request->ip(), $request->userAgent());
 
         return response()->json([
             'message' => 'Login realizado com sucesso',

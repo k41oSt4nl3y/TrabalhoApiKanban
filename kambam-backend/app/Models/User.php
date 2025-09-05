@@ -49,19 +49,15 @@ class User extends Authenticatable
 
     public function createToken(string $ipAddress = null, string $userAgent = null): array
     {
-        // Limpar tokens expirados
         $this->tokens()->where('expires_at', '<', now())->delete();
 
-        // Gerar tokens únicos
         $accessToken = Str::random(64);
         $refreshToken = Str::random(64);
-
-        // Criar registro no banco
         $tokenRecord = $this->tokens()->create([
             'token_hash' => hash('sha256', $accessToken),
             'refresh_token_hash' => hash('sha256', $refreshToken),
-            'expires_at' => now()->addHour(), // 1 hora
-            'refresh_expires_at' => now()->addDays(14), // 2 semanas
+            'expires_at' => now()->addHour(),
+            'refresh_expires_at' => now()->addDays(14),
             'ip_address' => $ipAddress,
             'user_agent' => $userAgent,
         ]);
@@ -87,7 +83,6 @@ class User extends Authenticatable
             return null;
         }
 
-        // Gerar novo access token
         $newAccessToken = Str::random(64);
         
         $tokenRecord->update([
@@ -97,7 +92,7 @@ class User extends Authenticatable
 
         return [
             'access_token' => $newAccessToken,
-            'refresh_token' => $refreshToken, // Refresh token permanece o mesmo
+            'refresh_token' => $refreshToken,
             'expires_at' => $tokenRecord->fresh()->expires_at->toDateTimeString(),
         ];
     }
@@ -126,7 +121,6 @@ class User extends Authenticatable
             ->first();
 
         if ($tokenRecord) {
-            // Atualizar último uso
             $tokenRecord->update(['last_used_at' => now()]);
             return $tokenRecord->user;
         }

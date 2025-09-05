@@ -117,7 +117,6 @@ class BoardController extends Controller
                 'owner_id' => $user->id,
             ]);
 
-            // Criar colunas padrão
             $defaultColumns = [
                 ['name' => 'To Do', 'order' => 1, 'wip_limit' => 999],
                 ['name' => 'Doing', 'order' => 2, 'wip_limit' => 999],
